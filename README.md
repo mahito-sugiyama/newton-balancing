@@ -1,6 +1,5 @@
-# Tensor Balancing
-An implementation of a fast tensor balancing algorithm by Newton's method.  
-The current version supports only matrices.
+# Matrix Balancing with Newton's Method
+An implementation of a fast matrix balancing algorithm using Newton's method, which rescales any nonnegative matrix into a [doubly stochastic matrix](https://en.wikipedia.org/wiki/Doubly_stochastic_matrix) such that each row and column sums to 1.
 
 ## Usage
 ### In your program
