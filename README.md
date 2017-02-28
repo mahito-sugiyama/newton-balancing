@@ -1,5 +1,8 @@
 # Matrix Balancing with Newton's Method
 An implementation of a fast matrix balancing algorithm using Newton's method, which rescales any nonnegative matrix into a [doubly stochastic matrix](https://en.wikipedia.org/wiki/Doubly_stochastic_matrix) such that each row and column sums to 1.
+Please see the following paper for more details:
+* Sugiyama, M., Nakahara, H., Tsuda, K.: **Tensor Balancing on Statistical Manifold**, *[arXiv:1702.08142](https://arxiv.org/abs/1702.08142)* (2017)
+
 
 ## Usage
 ### In your program
