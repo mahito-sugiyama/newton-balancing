@@ -461,7 +461,6 @@ double NewtonBalancing(MatrixXd& X, double error_tol, double rep_max, bool verbo
   return step;
 }
 
-
 // ================================================== //
 // ========== Sinkhorn balancing algorithm ========== //
 // ================================================== //
@@ -469,23 +468,17 @@ double Sinkhorn(MatrixXd& X, double error_tol, double rep_max, bool verbose) {
   double step = 1.0;
   Int exponent = 0;
   if (verbose) cout << endl;
-  while (true) {
-    for (Int i = 0; i < X.rows(); i++) {
-      double sum = X.row(i).sum();
-      for (Int j = 0; j < X.cols(); j++) {
-	X(i, j) = X(i, j) / (sum * (double)X.rows());
-	// X(i, j) = X(i, j) / sum;
-      }
-    }
-    for (Int j = 0; j < X.cols(); j++) {
-      double sum = X.col(j).sum();
-      for (Int i = 0; i < X.rows(); i++) {
-	X(i, j) = X(i, j) / (sum * (double)X.cols());
-	// X(i, j) = X(i, j) / sum;
-      }
-    }
 
-    double res = computeResidual(X);
+  VectorXd r = VectorXd::Ones(X.rows());
+  VectorXd s = VectorXd::Ones(X.cols());
+  MatrixXd Xn(X.rows(), X.cols());
+
+  while (true) {
+    r = 1.0 / ((X * s).array() * X.rows());
+    s = 1.0 / ((X.transpose() * r).array() * X.cols());
+    Xn = r.asDiagonal() * X * s.asDiagonal();
+    double res = computeResidual(Xn);
+
     if (verbose) {
       cout << "Step\t" << step << "\t" << "Residual\t" << res << endl << flush;
     } else {
