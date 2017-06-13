@@ -66,3 +66,8 @@ To compile the program, please edit paths in the "Makefile" according to the loc
 * `-n`: The newton balancing algorithm is used  
 * `-s`: The Sinkhorn-Knopp algorithm is used  
 * `-b`: The BNEWT algorithm is used
+
+## Contact
+Author: Mahito Sugiyama  
+Affiliation: National Institute of Informatics, Tokyo, Japan  
+E-mail: mahito@nii.ac.jp
