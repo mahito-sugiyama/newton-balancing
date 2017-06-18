@@ -49,6 +49,7 @@ public:
   Int check;
   Int supp;
   pair<Int, Int> id_mat;
+  vector<Int> id_tensor;
   double p, p_init, p_prev;
   double theta, theta_init, theta_prev, theta_sum, theta_sum_prev;
   double eta, eta_init, eta_prev;
@@ -64,6 +65,13 @@ ostream &operator<<(ostream& out, const vector<node>& s) {
   for (auto&& x : s) {
     out << setw(4) << right << setprecision(4) << fixed << x.id << setw(width) << right << x.p << setw(width) << right << x.theta << setw(width) << right << x.eta << endl;
   }
+  return out;
+}
+template<typename T> ostream &operator<<(ostream& out, const vector<T>& vec) {
+  for (Int i = 0; i < vec.size() - 1; ++i) {
+    out << vec[i] << ", ";
+  }
+  cout << vec[vec.size() - 1];
   return out;
 }
 
@@ -113,32 +121,10 @@ void readFromCSV(MatrixXd& X, ifstream& ifs) {
 // ================================================ //
 // ========== Newton balancing algorithm ========== //
 // ================================================ //
-// preprocess X by a one step Sinkhorn balancing
-void preprocess(MatrixXd& X) {
-  double sum_vec;
-  for (Int i = 0; i < X.rows(); i++) {
-    sum_vec = X.row(i).sum();
-    for (Int j = 0; j < X.cols(); j++) {
-      X(i, j) = X(i, j) / (sum_vec * (double)X.rows());
-    }
-  }
-  for (Int j = 0; j < X.cols(); j++) {
-    sum_vec = X.col(j).sum();
-    for (Int i = 0; i < X.rows(); i++) {
-      X(i, j) = X(i, j) / (sum_vec * (double)X.rows());
-    }
-  }
-}
 // pull away zero entries to right-upper and left-lower corners
 template<typename V> Int getFirstNonzeroSorting(V&& vec, vector<Int>& idx) {
   for (Int i = 0; i < vec.size(); ++i) {
     if (vec(idx[i]) > EPSILON) return i;
-  }
-  return -1;
-}
-template<typename V> Int getFirstNonzero(V&& vec) {
-  for (Int i = 0; i < vec.size(); i++) {
-    if (vec(i) > EPSILON) return i;
   }
   return -1;
 }
@@ -153,47 +139,26 @@ bool checkPullCondition(MatrixXd& X, vector<Int>& idx_row, vector<Int>& idx_col)
   }
   return true;
 }
-void pullZerosSortingRow(MatrixXd& X, vector<Int>& idx_row, vector<Int>& idx_col) {
+void pullZerosSortingEach(MatrixXd& X, vector<Int>& idx1, vector<Int>& idx2, bool is_row) {
   vector<Int> nonzero_vec;
   vector<Int> zero_vec;
 
-  for (auto&& j : reverse(idx_col)) {
-    // sort by j-th col
-    for (auto&& i : idx_row) {
-      if (X(i, j) > EPSILON)
-	nonzero_vec.push_back(i);
-      else
-	zero_vec.push_back(i);
-    }
-    idx_row.clear();
-    for (auto&& x : nonzero_vec) {
-      idx_row.push_back(x);
-    }
-    for (auto&& x : zero_vec) {
-      idx_row.push_back(x);
-    }
-    nonzero_vec.clear();
-    zero_vec.clear();
-  }
-}
-void pullZerosSortingCol(MatrixXd& X, vector<Int>& idx_row, vector<Int>& idx_col) {
-  vector<Int> nonzero_vec;
-  vector<Int> zero_vec;
-
-  for (auto&& i : reverse(idx_row)) {
+  for (auto&& i : reverse(idx1)) {
     // sort by i-th row
-    for (auto&& j : idx_col) {
-      if (X(i, j) > EPSILON)
+    for (auto&& j : idx2) {
+      if (is_row) swap(i, j);
+      if (X(i, j) > EPSILON) {
 	nonzero_vec.push_back(j);
-      else
+      } else {
 	zero_vec.push_back(j);
+      }
     }
-    idx_col.clear();
+    idx2.clear();
     for (auto&& x : nonzero_vec) {
-      idx_col.push_back(x);
+      idx2.push_back(x);
     }
     for (auto&& x : zero_vec) {
-      idx_col.push_back(x);
+      idx2.push_back(x);
     }
     nonzero_vec.clear();
     zero_vec.clear();
@@ -206,8 +171,8 @@ void pullZerosSorting(MatrixXd& X, vector<Int>& idx_row, vector<Int>& idx_col) {
   iota(idx_col.begin(), idx_col.end(), 0);
 
   while (!checkPullCondition(X, idx_row, idx_col)) {
-    pullZerosSortingRow(X, idx_row, idx_col);
-    pullZerosSortingCol(X, idx_row, idx_col);
+    pullZerosSortingEach(X, idx_row, idx_col, true);
+    pullZerosSortingEach(X, idx_col, idx_row, false);
   }
   MatrixXd X_tmp = X;
   for (Int i = 0; i < X.rows(); ++i) {
@@ -216,6 +181,15 @@ void pullZerosSorting(MatrixXd& X, vector<Int>& idx_row, vector<Int>& idx_col) {
     }
   }
   X = X_tmp;
+}
+// preprocess X by a one step Sinkhorn balancing
+void preprocess(MatrixXd& X) {
+  double sum_vec;
+  VectorXd r = VectorXd::Ones(X.rows());
+  VectorXd s = VectorXd::Ones(X.cols());
+  r = 1.0 / ((X * s).array() * X.rows());
+  s = 1.0 / ((X.transpose() * r).array() * X.cols());
+  X = r.asDiagonal() * X * s.asDiagonal();
 }
 // make a node matrix from eigen matrix
 void makePosetMatrix(MatrixXd& X, vector<vector<node>>& S, vector<pair<Int, Int>>& idx_tp) {
@@ -237,6 +211,47 @@ void makePosetMatrix(MatrixXd& X, vector<vector<node>>& S, vector<pair<Int, Int>
     for (; j <= min(i, (Int)X.cols() - 1); j++) {
       idx_tp.push_back(make_pair(i - j, j));
       S[i - j][j].p = X(i - j, j);
+    }
+  }
+}
+void makePosetFromMatrix(MatrixXd& X, vector<node>& S) {
+  Int dim = 2;
+  // traverse a matrix in the topological order for efficiency
+  for (Int i = 0; i < X.rows() + X.cols() - 1; ++i) {
+    Int j = i + 1 - X.rows(); // i - j = X.rows() - 1
+    if (j < 0) j = 0;
+    for (; j <= min(i, (Int)X.cols() - 1); j++) {
+      if (X(i - j, j) > EPSILON) {
+	node x;
+	x.id_tensor.push_back(i - j);
+	x.id_tensor.push_back(j);
+	x.p = 0;
+	x.theta = 0; x.theta_sum = 0; x.theta_sum_prev = 0;
+	x.eta = 0;
+	S.push_back(x);
+      }
+    }
+  }
+  // make a poset by creating edges between nodes
+  for (auto it1 = S.begin(); it1 != S.end(); ++it1) {
+    vector<Int> checks(dim, 0);
+    for (auto it2 = it1 + 1; it2 != S.end(); ++it2) {
+      if (accumulate(checks.begin(), checks.end(), 0) == dim) break;
+      for (Int i = 0; i < checks.size(); ++i) {
+	if (checks[i] == 0) {
+	  Int check_inner = 1;
+	  for (Int j = 0; j < checks.size(); ++j) {
+	    if (j != i && it1->id_tensor[j] <= it2->id_tensor[j]) {
+	      check_inner++;
+	    }
+	  }
+	  if (it1->id_tensor[i] + 1 == it2->id_tensor[i] && check_inner == (Int)checks.size()) {
+	    it1->to.push_back(ref(*it2));
+	    it2->from.push_back(ref(*it1));
+	    checks[i] = 1;
+	  }
+	}
+      }
     }
   }
 }
@@ -398,20 +413,30 @@ void recoverZeros(MatrixXd& X, vector<Int>& idx_row, vector<Int>& idx_col) {
 // the main function for newton balancing algorithm
 double NewtonBalancing(MatrixXd& X, double error_tol, double rep_max, bool verbose) {
   Int n = X.rows();
-  clock_t ts, te;
   vector<Int> idx_row;
   vector<Int> idx_col;
-  cout << "  pulling zeros ... " << flush;
+  cout << "  sorting rows and columns ... " << flush;
   pullZerosSorting(X, idx_row, idx_col);
   cout << "end" << endl;
   // preprocess
-  double X_sum = X.sum();
-  X /= X_sum;
   preprocess(X);
   // make a node matrix
   vector<vector<node>> S;
   vector<pair<Int, Int>> idx_tp;
   makePosetMatrix(X, S, idx_tp);
+
+  vector<node> Snew;
+  makePosetFromMatrix(X, Snew);
+  for (auto&& x : Snew) {
+    cout << "(" << x.id_tensor << ") -> ";
+    for (auto&& p : x.to) {
+      cout << "(" << p.get().id_tensor << "),";
+    }
+    cout << endl;
+  }
+  cout << endl;
+  exit(1);
+
   vector<Int> nonzero_row;
   vector<Int> nonzero_col;
   vector<pair<pair<Int, Int>, double>> beta;
