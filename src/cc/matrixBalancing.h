@@ -38,35 +38,17 @@ using namespace std;
 using namespace Eigen;
 using namespace std::chrono;
 
-double EPSILON = 1e-20;
+double EPSILON = 1e-300;
 
 // node structure
 class node {
 public:
-  bool is_lower;
-  bool is_upper;
-  Int id, id_org;
-  Int check;
-  Int supp;
-  pair<Int, Int> id_mat;
-  vector<Int> id_tensor;
-  double p, p_init, p_prev;
-  double theta, theta_init, theta_prev, theta_sum, theta_sum_prev;
-  double eta, eta_init, eta_prev;
-  double score, pvalue;
-  vector<reference_wrapper<node>> from;
-  vector<reference_wrapper<node>> to;
+  double p;
+  double theta, theta_prev, theta_sum, theta_sum_prev;
+  double eta, eta_prev;
+  double beta;
 };
 
-// output a poset "s"
-ostream &operator<<(ostream& out, const vector<node>& s) {
-  Int width = 8;
-  out << setw(4) << right << "id" << setw(width) << right << "prob" << setw(width) << right << "theta" << setw(width) << right << "eta" << endl;
-  for (auto&& x : s) {
-    out << setw(4) << right << setprecision(4) << fixed << x.id << setw(width) << right << x.p << setw(width) << right << x.theta << setw(width) << right << x.eta << endl;
-  }
-  return out;
-}
 template<typename T> ostream &operator<<(ostream& out, const vector<T>& vec) {
   for (Int i = 0; i < vec.size() - 1; ++i) {
     out << vec[i] << ", ";
@@ -111,11 +93,47 @@ void readFromCSV(MatrixXd& X, ifstream& ifs) {
     data.push_back(tmp);
   }
   X = MatrixXd::Zero(data.size(), data[0].size());
-  for (Int i = 0; i < X.rows(); i++) {
-    for (Int j = 0; j < X.cols(); j++) {
+  for (Int i = 0; i < X.rows(); ++i) {
+    for (Int j = 0; j < X.cols(); ++j) {
       X(i, j) = data[i][j];
     }
   }
+}
+void outputResidual(double res, double step, Int& exponent, bool verbose) {
+  if (verbose) {
+    cout << "Step\t" << step << "\t" << "Residual\t" << res << endl << flush;
+  } else {
+    if (res < pow(10, -1.0 * (double)exponent)) {
+      cout << "  Step "; if (step < 10.0) cout << " ";
+      cout << step << ", Residual: " << res << endl;
+      exponent++;
+    }
+  }
+}
+// compute the residual
+double computeResidual(vector<vector<node>>& S) {
+  Int row = S.size();
+  Int col = S[0].size();
+  double res = 0.0;
+  for (Int i = 0; i < row; ++i) {
+    double sum = 0.0;
+    for (Int j = 0; j < col; ++j) sum += S[i][j].p;
+    res += pow((sum * row) - 1.0, 2.0);
+  }
+  for (Int j = 0; j < col; ++j) {
+    double sum = 0.0;
+    for (Int i = 0; i < row; ++i) sum += S[i][j].p;
+    res += pow((sum * col) - 1.0, 2.0);
+  }
+  return sqrt(res);
+}
+double computeResidual(MatrixXd& X) {
+  double res = 0.0;
+  for (Int i = 0; i < X.rows(); ++i)
+    res += pow((X.row(i).sum() * (double)X.cols()) - 1.0, 2.0);
+  for (Int j = 0; j < X.cols(); ++j)
+    res += pow((X.col(j).sum() * (double)X.rows()) - 1.0, 2.0);
+  return sqrt(res);
 }
 
 // ================================================ //
@@ -139,41 +157,44 @@ bool checkPullCondition(MatrixXd& X, vector<Int>& idx_row, vector<Int>& idx_col)
   }
   return true;
 }
-void pullZerosSortingEach(MatrixXd& X, vector<Int>& idx1, vector<Int>& idx2, bool is_row) {
-  vector<Int> nonzero_vec;
-  vector<Int> zero_vec;
-
-  for (auto&& i : reverse(idx1)) {
-    // sort by i-th row
-    for (auto&& j : idx2) {
-      if (is_row) swap(i, j);
-      if (X(i, j) > EPSILON) {
-	nonzero_vec.push_back(j);
-      } else {
-	zero_vec.push_back(j);
+void sortZeroEach(MatrixXd& X, vector<Int>& idx_row, vector<Int>& idx_col) {
+  vector<pair<Int, Int>> idx_nonzero_row;
+  for (auto&& i : idx_row) {
+    for (Int j = 0; j < idx_col.size(); ++j) {
+      if (X(i, idx_col[j]) > EPSILON) {
+	idx_nonzero_row.push_back(make_pair(j, i));
+	break;
       }
     }
-    idx2.clear();
-    for (auto&& x : nonzero_vec) {
-      idx2.push_back(x);
+  }
+  stable_sort(idx_nonzero_row.begin(), idx_nonzero_row.end());
+  for (Int i = 0; i < idx_row.size(); ++i) {
+    idx_row[i] = idx_nonzero_row[i].second;
+  }
+  vector<pair<Int, Int>> idx_nonzero_col;
+  for (auto&& j : idx_col) {
+    for (Int i = 0; i < idx_row.size(); ++i) {
+      if (X(idx_row[i], j) > EPSILON) {
+	idx_nonzero_col.push_back(make_pair(i, j));
+	break;
+      }
     }
-    for (auto&& x : zero_vec) {
-      idx2.push_back(x);
-    }
-    nonzero_vec.clear();
-    zero_vec.clear();
+  }
+  stable_sort(idx_nonzero_col.begin(), idx_nonzero_col.end());
+  for (Int j = 0; j < idx_col.size(); ++j) {
+    idx_col[j] = idx_nonzero_col[j].second;
   }
 }
-void pullZerosSorting(MatrixXd& X, vector<Int>& idx_row, vector<Int>& idx_col) {
+void sortZero(MatrixXd& X, vector<Int>& idx_row, vector<Int>& idx_col) {
   idx_row.resize(X.rows());
   idx_col.resize(X.cols());
   iota(idx_row.begin(), idx_row.end(), 0);
   iota(idx_col.begin(), idx_col.end(), 0);
 
   while (!checkPullCondition(X, idx_row, idx_col)) {
-    pullZerosSortingEach(X, idx_row, idx_col, true);
-    pullZerosSortingEach(X, idx_col, idx_row, false);
+    sortZeroEach(X, idx_row, idx_col);
   }
+
   MatrixXd X_tmp = X;
   for (Int i = 0; i < X.rows(); ++i) {
     for (Int j = 0; j < X.cols(); ++j) {
@@ -191,141 +212,7 @@ void preprocess(MatrixXd& X) {
   s = 1.0 / ((X.transpose() * r).array() * X.cols());
   X = r.asDiagonal() * X * s.asDiagonal();
 }
-// make a node matrix from eigen matrix
-void makePosetMatrix(MatrixXd& X, vector<vector<node>>& S, vector<pair<Int, Int>>& idx_tp) {
-  Int n = X.rows();
-  // initialization
-  S.resize(X.rows());
-  for (auto&& vec : S) {
-    vec.resize(X.cols());
-    for (auto&& x : vec){
-      x.p = 0;
-      x.theta = 0; x.theta_sum = 0; x.theta_sum_prev = 0;
-      x.eta = 0;
-    }
-  }
-  // traverse a matrix in the topological order
-  for (Int i = 0; i < X.rows() + X.cols() - 1; i++) {
-    Int j = i + 1 - X.rows(); // i - j = X.rows() - 1
-    if (j < 0) j = 0;
-    for (; j <= min(i, (Int)X.cols() - 1); j++) {
-      idx_tp.push_back(make_pair(i - j, j));
-      S[i - j][j].p = X(i - j, j);
-    }
-  }
-}
-void makePosetFromMatrix(MatrixXd& X, vector<node>& S) {
-  Int dim = 2;
-  // traverse a matrix in the topological order for efficiency
-  for (Int i = 0; i < X.rows() + X.cols() - 1; ++i) {
-    Int j = i + 1 - X.rows(); // i - j = X.rows() - 1
-    if (j < 0) j = 0;
-    for (; j <= min(i, (Int)X.cols() - 1); j++) {
-      if (X(i - j, j) > EPSILON) {
-	node x;
-	x.id_tensor.push_back(i - j);
-	x.id_tensor.push_back(j);
-	x.p = 0;
-	x.theta = 0; x.theta_sum = 0; x.theta_sum_prev = 0;
-	x.eta = 0;
-	S.push_back(x);
-      }
-    }
-  }
-  // make a poset by creating edges between nodes
-  for (auto it1 = S.begin(); it1 != S.end(); ++it1) {
-    vector<Int> checks(dim, 0);
-    for (auto it2 = it1 + 1; it2 != S.end(); ++it2) {
-      if (accumulate(checks.begin(), checks.end(), 0) == dim) break;
-      for (Int i = 0; i < checks.size(); ++i) {
-	if (checks[i] == 0) {
-	  Int check_inner = 1;
-	  for (Int j = 0; j < checks.size(); ++j) {
-	    if (j != i && it1->id_tensor[j] <= it2->id_tensor[j]) {
-	      check_inner++;
-	    }
-	  }
-	  if (it1->id_tensor[i] + 1 == it2->id_tensor[i] && check_inner == (Int)checks.size()) {
-	    it1->to.push_back(ref(*it2));
-	    it2->from.push_back(ref(*it1));
-	    checks[i] = 1;
-	  }
-	}
-      }
-    }
-  }
-}
-// make a beta the submanifold
-void makeBeta(vector<vector<node>>& S, vector<Int>& nonzero_row, vector<Int>& nonzero_col, vector<pair<pair<Int, Int>, double>>& beta) {
-  beta.push_back(make_pair(make_pair(0, 0), 1.0));
-  nonzero_row.resize(S.size());
-  nonzero_row[0] = 0;
-  for (Int i = 1; i < S.size(); i++) {
-    for (Int j = 0; j < S[0].size(); j++) {
-      if (S[i][j].p > EPSILON) {
-	nonzero_row[i] = j;
-	beta.push_back(make_pair(make_pair(i, j), (double)(S.size() - i) / (double)S.size()));
-	break;
-      }
-    }
-  }
-  nonzero_col.resize(S[0].size());
-  nonzero_col[0] = 0;
-  for (Int j = 1; j < S[0].size(); j++) {
-    for (Int i = 0; i < S.size(); i++) {
-      if (S[i][j].p > EPSILON) {
-	nonzero_col[j] = i;
-	beta.push_back(make_pair(make_pair(i, j), (double)(S[0].size() - j) / (double)S[0].size()));
-	break;
-      }
-    }
-  }
-}
-// compute theta for beta
-void computeThetaForBeta(vector<vector<node>>& S, vector<Int>& nonzero_row, vector<Int>& nonzero_col) {
-  S[0][0].theta = log(S[0][0].p);
-  S[0][0].theta_sum = log(S[0][0].p);
-  for (Int i = 1; i < S.size(); i++) {
-    S[i][nonzero_row[i]].theta = log(S[i][nonzero_row[i]].p) - S[i - 1][nonzero_row[i - 1]].theta_sum;
-    S[i][nonzero_row[i]].theta_sum = S[i][nonzero_row[i]].theta + S[i - 1][nonzero_row[i - 1]].theta_sum;
-  }
-  for (Int j = 1; j < S[0].size(); j++) {
-    S[nonzero_col[j]][j].theta = log(S[nonzero_col[j]][j].p) - S[nonzero_col[j - 1]][j - 1].theta_sum;
-    S[nonzero_col[j]][j].theta_sum = S[nonzero_col[j]][j].theta + S[nonzero_col[j - 1]][j - 1].theta_sum;
-  }
-}
-// compute eta for all entries
-void computeEta(vector<vector<node>>& S, vector<pair<Int, Int>>& idx_tp) {
-  for (auto&& ij : reverse(idx_tp)) {
-    double a = S[ij.first][ij.second].p;
-    double b = ij.first + 1 < S.size() ? S[ij.first + 1][ij.second].eta : 0;
-    double c = ij.second + 1 < S[0].size() ? S[ij.first][ij.second + 1].eta : 0;
-    double d = ij.first + 1 < S.size() && ij.second + 1 < S[0].size() ? S[ij.first + 1][ij.second + 1].eta : 0;
-    S[ij.first][ij.second].eta = a + b + c - d;
-  }
-}
-// e-projection
-void computeP(vector<vector<node>>& S, vector<Int>& nonzero_row, vector<Int>& nonzero_col) {
-  S[0][0].theta_sum = S[0][0].theta;
-  S[0][0].theta_sum_prev = S[0][0].theta_prev;
-  for (Int i = 1; i < S.size(); i++) {
-    S[i][nonzero_row[i]].theta_sum = S[i][nonzero_row[i]].theta + S[i - 1][nonzero_row[i - 1]].theta_sum;
-    S[i][nonzero_row[i]].theta_sum_prev = S[i][nonzero_row[i]].theta_prev + S[i - 1][nonzero_row[i - 1]].theta_sum_prev;
-  }
-  for (Int j = 1; j < S[0].size(); j++) {
-    S[nonzero_col[j]][j].theta_sum = S[nonzero_col[j]][j].theta + S[nonzero_col[j - 1]][j - 1].theta_sum;
-    S[nonzero_col[j]][j].theta_sum_prev = S[nonzero_col[j]][j].theta_prev + S[nonzero_col[j - 1]][j - 1].theta_sum_prev;
-  }
-  for (Int i = 0; i < S.size(); i++) {
-    for (Int j = 0; j < S[0].size(); j++) {
-      if (S[i][j].p > EPSILON) {
-	double theta_new = S[i][nonzero_row[i]].theta_sum + S[nonzero_col[j]][j].theta_sum - S[0][0].theta_sum;
-	double theta_old = S[i][nonzero_row[i]].theta_sum_prev + S[nonzero_col[j]][j].theta_sum_prev - S[0][0].theta_sum_prev;
-	S[i][j].p *= exp(theta_new - theta_old);
-      }
-    }
-  }
-}
+// renormalization
 void renormalize(vector<vector<node>>& S) {
   // total sum
   double p_sum = 0.0;
@@ -345,28 +232,185 @@ void renormalize(vector<vector<node>>& S) {
     }
   }
 }
-void eProject(vector<vector<node>>& S, vector<Int>& nonzero_row, vector<Int>& nonzero_col, vector<pair<pair<Int, Int>, double>>& beta, vector<pair<Int, Int>>& idx_tp) {
+// compute theta
+void computeThetaOrg(MatrixXd& X_org, MatrixXd& T) {
+  MatrixXd X = X_org;
+  X = X / X.sum();
+  MatrixXd T_sum = T;
+  vector<Int> idx_row(X.rows() - 1);
+  vector<Int> idx_col(X.cols() - 1);
+  iota(idx_row.begin(), idx_row.end(), 1);
+  iota(idx_col.begin(), idx_col.end(), 1);
+  T(0, 0) = log(X(0, 0));
+  T_sum(0, 0) = log(X(0, 0));
+  for (auto&& i : idx_row) {
+    T(i, 0) = X(i, 0) > EPSILON ? log(X(i, 0)) - T_sum(i - 1, 0) : 0.0;
+    T_sum(i, 0) = T(i, 0) + T_sum(i - 1, 0);
+  }
+  for (auto&& j : idx_col) {
+    T(0, j) = X(0, j) > EPSILON ? log(X(0, j)) - T_sum(0, j - 1) : 0.0;
+    T_sum(0, j) = T(0, j) + T_sum(0, j - 1);
+  }
+  for (auto&& i : idx_row) {
+    for (auto&& j : idx_col) {
+      T_sum(i, j) = T_sum(i - 1, j) + T_sum(i, j - 1) - T_sum(i - 1, j - 1);
+      T(i, j) = X(i, j) > EPSILON ? log(X(i, j)) - T_sum(i, j) : 0.0;
+      T_sum(i, j) += T(i, j);
+    }
+  }
+}
+// make a node structured matrix S from a given matrix X
+void makeNodesFromMatrix(MatrixXd& X, vector<vector<node>>& S) {
+  S.resize(X.rows());
+  Int i = 0;
+  for (auto&& vec : S) {
+    vec.resize(X.cols());
+    Int j = 0;
+    for (auto&& x : vec) {
+      x.p = X(i, j);
+      x.theta = 0.0; x.theta_sum = 0.0; x.theta_sum_prev = 0.0;
+      x.eta = 0.0;
+      x.beta = 0.0;
+      j++;
+    }
+    i++;
+  }
+}
+// compute beta (contraint)
+void setBeta(vector<vector<node>>& S) {
+  Int row = S.size();
+  Int col = S[0].size();
+  for (Int i = 0; i < row; ++i) {
+    for (Int j = 0; j < col; ++j) {
+      if (S[i][j].p > EPSILON) {
+	S[i][j].beta = (double)(row - i) / (double)row;
+	break;
+      }
+    }
+  }
+  for (Int j = 0; j < col; ++j) {
+    for (Int i = 0; i < row; ++i) {
+      if (S[i][j].p > EPSILON) {
+	S[i][j].beta = (double)(col - j) / (double)col;
+	break;
+      }
+    }
+  }
+}
+void computeTheta(vector<vector<node>>& S) {
+  vector<Int> idx_row(S.size() - 1);
+  vector<Int> idx_col(S[0].size() - 1);
+  iota(idx_row.begin(), idx_row.end(), 1);
+  iota(idx_col.begin(), idx_col.end(), 1);
+  S[0][0].theta = log(S[0][0].p);
+  S[0][0].theta_sum = log(S[0][0].p);
+  for (auto&& i : idx_row) {
+    S[i][0].theta = S[i][0].p > EPSILON ? log(S[i][0].p) - S[i - 1][0].theta_sum : 0.0;
+    S[i][0].theta_sum = S[i][0].theta + S[i - 1][0].theta_sum;
+  }
+  for (auto&& j : idx_col) {
+    S[0][j].theta = S[0][j].p > EPSILON ? log(S[0][j].p) - S[0][j - 1].theta_sum : 0.0;
+    S[0][j].theta_sum = S[0][j].theta + S[0][j - 1].theta_sum;
+  }
+  for (auto&& i : idx_row) {
+    for (auto&& j : idx_col) {
+      S[i][j].theta_sum = S[i - 1][j].theta_sum + S[i][j - 1].theta_sum - S[i - 1][j - 1].theta_sum;
+      S[i][j].theta = S[i][j].p > EPSILON ? log(S[i][j].p) - S[i][j].theta_sum : 0.0;
+      S[i][j].theta_sum += S[i][j].theta;
+    }
+  }
+}
+void computeEta(vector<vector<node>>& S) {
+  vector<Int> idx_row(S.size() - 1);
+  vector<Int> idx_col(S[0].size() - 1);
+  iota(idx_row.begin(), idx_row.end(), 0);
+  iota(idx_col.begin(), idx_col.end(), 0);
+  S[idx_row.size()][idx_col.size()].eta = S[idx_row.size()][idx_col.size()].p;
+  for (auto&& i : reverse(idx_row)) {
+    S[i][idx_col.size()].eta = S[i][idx_col.size()].p + S[i + 1][idx_col.size()].eta;
+  }
+  for (auto&& j : reverse(idx_col)) {
+    S[idx_row.size()][j].eta = S[idx_row.size()][j].p + S[idx_row.size()][j + 1].eta;
+  }
+  for (auto&& i : reverse(idx_row)) {
+    for (auto&& j : reverse(idx_col)) {
+      S[i][j].eta = S[i][j].p + S[i + 1][j].eta + S[i][j + 1].eta - S[i + 1][j + 1].eta;
+    }
+  }
+}
+void computeP(vector<vector<node>>& S) {
+  vector<Int> idx_row(S.size() - 1);
+  vector<Int> idx_col(S[0].size() - 1);
+  iota(idx_row.begin(), idx_row.end(), 1);
+  iota(idx_col.begin(), idx_col.end(), 1);
+  S[0][0].p = exp(S[0][0].theta);
+  S[0][0].theta_sum = S[0][0].theta;
+  for (auto&& i : idx_row) {
+    S[i][0].theta_sum = S[i][0].theta + S[i - 1][0].theta_sum;
+    if (S[i][0].p > EPSILON) S[i][0].p = exp(S[i][0].theta_sum);
+  }
+  for (auto&& j : idx_col) {
+    S[0][j].theta_sum = S[0][j].theta + S[0][j - 1].theta_sum;
+    if (S[0][j].p > EPSILON) S[0][j].p = exp(S[0][j].theta_sum);
+  }
+  for (auto&& i : idx_row) {
+    for (auto&& j : idx_col) {
+      S[i][j].theta_sum = S[i][j].theta + S[i - 1][j].theta_sum + S[i][j - 1].theta_sum - S[i - 1][j - 1].theta_sum;
+      if (S[i][j].p > EPSILON) S[i][j].p = exp(S[i][j].theta_sum);
+    }
+  }
+}
+void eProject(vector<vector<node>>& S) {
   Int S_size = 0;
   for (auto&& vec : S) {
     for (auto&& x : vec) {
-      if (x.p > EPSILON) S_size++;
+      if (x.beta > EPSILON) S_size++;
     }
   }
-  VectorXd theta_vec = VectorXd::Zero(beta.size());
-  VectorXd eta_vec = VectorXd::Zero(beta.size());
-  for (Int i = 0; i < beta.size(); i++) {
-    theta_vec[i] = S[beta[i].first.first][beta[i].first.second].theta;
-    eta_vec[i]   = S[beta[i].first.first][beta[i].first.second].eta - beta[i].second;
+  Int row = S.size();
+  Int col = S[0].size();
+  Int beta_size = row + col - 1;
+  VectorXd theta_vec = VectorXd::Zero(beta_size);
+  VectorXd eta_vec = VectorXd::Zero(beta_size);
+  vector<vector<Int>> idx_vec(beta_size);
+  Int i_beta = 0;
+
+  // set beta
+  theta_vec[i_beta] = S[0][0].theta;
+  eta_vec[i_beta] = S[0][0].eta - S[0][0].beta;
+  idx_vec[i_beta].push_back(0);
+  idx_vec[i_beta].push_back(0);
+  i_beta++;
+  for (Int i = 1; i < row; ++i) {
+    for (Int j = 0; j < col; ++j) {
+      if (S[i][j].beta > EPSILON) {
+	theta_vec[i_beta] = S[i][j].theta;
+	eta_vec[i_beta] = S[i][j].eta - S[i][j].beta;
+	idx_vec[i_beta].push_back(i);
+	idx_vec[i_beta].push_back(j);
+	i_beta++;
+	break;
+      }
+    }
   }
-  MatrixXd J(beta.size(), beta.size()); // Jacobian matrix
-  for (Int i1 = 0; i1 < beta.size(); i1++) {
-    for (Int i2 = 0; i2 < beta.size(); i2++) {
-      Int i1_i = beta[i1].first.first;
-      Int i1_j = beta[i1].first.second;
-      Int i2_i = beta[i2].first.first;
-      Int i2_j = beta[i2].first.second;
-      J(i1, i2) = S[max(i1_i, i2_i)][max(i1_j, i2_j)].eta;
-      J(i1, i2) -= S[i1_i][i1_j].eta * S[i2_i][i2_j].eta * S_size;
+  for (Int j = 1; j < col; ++j) {
+    for (Int i = 0; i < row; ++i) {
+      if (S[i][j].beta > EPSILON) {
+	theta_vec[i_beta] = S[i][j].theta;
+	eta_vec[i_beta] = S[i][j].eta - S[i][j].beta;
+	idx_vec[i_beta].push_back(i);
+	idx_vec[i_beta].push_back(j);
+	i_beta++;
+	break;
+      }
+    }
+  }
+  // set Jacobian J
+  MatrixXd J(beta_size, beta_size); // Jacobian matrix
+  for (Int i = 0; i < beta_size; ++i) {
+    for (Int j = 0; j < beta_size; ++j) {
+      J(i, j)  = S[max(idx_vec[i][0], idx_vec[j][0])][max(idx_vec[i][1], idx_vec[j][1])].eta;
+      J(i, j) -= S[idx_vec[i][0]][idx_vec[i][1]].eta * S[idx_vec[j][0]][idx_vec[j][1]].eta;
     }
   }
   theta_vec += (-1 * J).colPivHouseholderQr().solve(eta_vec);
@@ -374,25 +418,57 @@ void eProject(vector<vector<node>>& S, vector<Int>& nonzero_row, vector<Int>& no
   // theta_vec += (-1 * J).fullPivLu().solve(eta_vec);
 
   // store theta
-  for (Int i = 0; i < beta.size(); i++) {
-    S[beta[i].first.first][beta[i].first.second].theta_prev = S[beta[i].first.first][beta[i].first.second].theta;
-    S[beta[i].first.first][beta[i].first.second].theta = theta_vec[i];
+  for (Int i = 0; i < beta_size; ++i) {
+    S[idx_vec[i][0]][idx_vec[i][1]].theta_prev = S[idx_vec[i][0]][idx_vec[i][1]].theta;
+    S[idx_vec[i][0]][idx_vec[i][1]].theta = theta_vec[i];
   }
   // update p
-  computeP(S, nonzero_row, nonzero_col);
+  computeP(S);
   renormalize(S);
-  computeEta(S, idx_tp);
+  computeEta(S);
 }
-// compute the residual
-double computeResidual(MatrixXd& X) {
-  double res = 0.0;
-  for (Int i = 0; i < X.rows(); i++)
-    res += pow((X.row(i).sum() * (double)X.cols()) - 1.0, 2.0);
-  for (Int j = 0; j < X.cols(); j++)
-    res += pow((X.col(j).sum() * (double)X.rows()) - 1.0, 2.0);
-  return sqrt(res);
+void computeBalancer(vector<vector<node>>& S, MatrixXd& X, MatrixXd& T, VectorXd& r, VectorXd& s) {
+  Int row = r.size();
+  Int col = s.size();
+  vector<Int> iota_row;
+  vector<Int> iota_col;
+
+  for (Int i = 0; i < row; ++i) {
+    for (Int j = 0; j < col; ++j) {
+      if (S[i][j].beta > EPSILON) {
+	iota_row.push_back(j);
+	break;
+      }
+    }
+  }
+  for (Int j = 0; j < col; ++j) {
+    for (Int i = 0; i < row; ++i) {
+      if (S[i][j].beta > EPSILON) {
+	iota_col.push_back(i);
+	break;
+      }
+    }
+  }
+
+  for (Int i = 0; i < row; ++i) {
+    r[i] = 0.0;
+    for (Int ii = 0; ii <= i; ++ii) {
+      r[i] += S[ii][iota_row[ii]].theta - T(ii, iota_row[ii]);
+    }
+    r[i] = exp(r[i]);
+  }
+  for (Int j = 0; j < col; ++j) {
+    s[j] = 0.0;
+    for (Int jj = 0; jj <= j; ++jj) {
+      s[j] += S[iota_col[jj]][jj].theta - T(iota_col[jj], jj);
+    }
+    s[j] = exp(s[j]);
+  }
+
+  MatrixXd Xb = r.asDiagonal() * X * s.asDiagonal();
+  r *= row / Xb.sum();
 }
-void recoverZeros(MatrixXd& X, vector<Int>& idx_row, vector<Int>& idx_col) {
+void recoverZeros(MatrixXd& X, VectorXd& r, VectorXd& s, vector<Int>& idx_row, vector<Int>& idx_col) {
   vector<Int> idx_org_row(X.rows());
   iota(idx_org_row.begin(), idx_org_row.end(), 0);
   sort(idx_org_row.begin(), idx_org_row.end(), [&idx_row](Int i, Int j) {return idx_row[i] < idx_row[j];});
@@ -401,101 +477,91 @@ void recoverZeros(MatrixXd& X, vector<Int>& idx_row, vector<Int>& idx_col) {
   sort(idx_org_col.begin(), idx_org_col.end(), [&idx_col](Int i, Int j) {return idx_col[i] < idx_col[j];});
 
   MatrixXd Xnew = X;
+  VectorXd rnew = r;
+  VectorXd snew = s;
   for (Int i = 0; i < X.rows(); i++) {
-    Xnew.row(i) = X.row(idx_org_row[i]);
+    for (Int j = 0; j < X.cols(); j++) {
+      Xnew(i, j) = X(idx_org_row[i], idx_org_col[j]);
+    }
   }
-  X = Xnew;
+  for (Int i = 0; i < X.rows(); i++) {
+    rnew[i] = r[idx_org_row[i]];
+  }
   for (Int j = 0; j < X.cols(); j++) {
-    Xnew.col(j) = X.col(idx_org_col[j]);
+    snew[j] = s[idx_org_col[j]];
   }
   X = Xnew;
+  r = rnew;
+  s = snew;
 }
 // the main function for newton balancing algorithm
-double NewtonBalancing(MatrixXd& X, double error_tol, double rep_max, bool verbose) {
-  Int n = X.rows();
+double NewtonBalancing(MatrixXd& X, VectorXd& r, VectorXd& s, double error_tol, double rep_max, bool verbose) {
   vector<Int> idx_row;
   vector<Int> idx_col;
+  // sort rows and orders
   cout << "  sorting rows and columns ... " << flush;
-  pullZerosSorting(X, idx_row, idx_col);
+  sortZero(X, idx_row, idx_col);
   cout << "end" << endl;
+  MatrixXd T = X; // theta for the input matrix
+  computeThetaOrg(X, T);
   // preprocess
-  preprocess(X);
+  MatrixXd X_proc = X;
+  preprocess(X_proc);
   // make a node matrix
   vector<vector<node>> S;
-  vector<pair<Int, Int>> idx_tp;
-  makePosetMatrix(X, S, idx_tp);
-
-  vector<node> Snew;
-  makePosetFromMatrix(X, Snew);
-  for (auto&& x : Snew) {
-    cout << "(" << x.id_tensor << ") -> ";
-    for (auto&& p : x.to) {
-      cout << "(" << p.get().id_tensor << "),";
-    }
-    cout << endl;
-  }
-  cout << endl;
-  exit(1);
-
-  vector<Int> nonzero_row;
-  vector<Int> nonzero_col;
-  vector<pair<pair<Int, Int>, double>> beta;
-  makeBeta(S, nonzero_row, nonzero_col, beta);
-  computeThetaForBeta(S, nonzero_row, nonzero_col);
-  computeEta(S, idx_tp);
-
+  makeNodesFromMatrix(X_proc, S);
+  setBeta(S);
+  computeTheta(S);
+  computeEta(S);
   // run Newton's method
   if (verbose) cout << "----- Start Newton's method -----" << endl;
-  double res = 0.0;
+  double res = 1.0;
+  double res_prev = (double)(X.rows() + X.cols());
   double step = 1.0;
   Int exponent = 0;
   auto t_start = system_clock::now();
   while (step <= rep_max) {
     // perform e-projection
-    eProject(S, nonzero_row, nonzero_col, beta, idx_tp);
-    // put results to X
-    for (Int i = 0; i < X.rows(); i++) {
-      for (Int j = 0; j < X.cols(); j++) {
-	X(i, j) = S[i][j].p;
-      }
-    }
-    double res_prev = res;
-    res = computeResidual(X);
+    eProject(S);
+    res = computeResidual(S);
+    outputResidual(res, step, exponent, verbose); // output the residual
+    if (res < error_tol) break;
     if (res_prev >= EPSILON && res > res_prev * 100) {
       cout << "Terminate with failing to convergence." << endl;
       return step;
     }
-
-    // output the residual
-    if (verbose) {
-      cout << "Step\t" << step << "\t" << "Residual\t" << res << endl << flush;
-    } else {
-      if (res < pow(10, -1.0 * (double)exponent)) {
-	cout << "  Step "; if (step < 10.0) cout << " ";
-	cout << step << ", Residual: " << res << endl;
-	exponent++;
-      }
-    }
-    if (res < error_tol) break;
+    res_prev = res;
     step += 1.0;
   }
   if (verbose) cout << "----- End Newton's method -----" << endl;
-  // swap again to recover the original row and column orders
-  recoverZeros(X, idx_row, idx_col);
-  X = X * X.rows();
+  // compute balancers
+  computeBalancer(S, X, T, r, s);
+  // compute the final balanced X
+  for (Int i = 0; i < X.rows(); ++i) {
+    for (int j = 0; j < X.cols(); ++j) {
+      X(i, j) = S[i][j].p * X.rows();
+    }
+  }
+  // re-sort rows and columns to recover the original row and column orders
+  recoverZeros(X, r, s, idx_row, idx_col);
+  // MatrixXd Xb = r.asDiagonal() * X * s.asDiagonal();
+  // cout << "row sums: " << Xb.rowwise().sum().transpose() << endl;
+  // cout << "col sums: " << Xb.colwise().sum() << endl;
   return step;
 }
 
 // ================================================== //
 // ========== Sinkhorn balancing algorithm ========== //
 // ================================================== //
-double Sinkhorn(MatrixXd& X, double error_tol, double rep_max, bool verbose) {
+double Sinkhorn(MatrixXd& X, VectorXd& r, VectorXd& s, double error_tol, double rep_max, bool verbose) {
   double step = 1.0;
   Int exponent = 0;
   if (verbose) cout << endl;
 
-  VectorXd r = VectorXd::Ones(X.rows());
-  VectorXd s = VectorXd::Ones(X.cols());
+  r = VectorXd::Ones(X.rows());
+  s = VectorXd::Ones(X.cols());
+  // VectorXd r = VectorXd::Ones(X.rows());
+  // VectorXd s = VectorXd::Ones(X.cols());
   MatrixXd Xn(X.rows(), X.cols());
 
   while (true) {
@@ -523,6 +589,9 @@ double Sinkhorn(MatrixXd& X, double error_tol, double rep_max, bool verbose) {
     }
     step += 1.0;
   }
+
+  r *= X.rows() / Xn.sum();
+  X = Xn;
   return step;
 }
 
@@ -538,7 +607,7 @@ void makeSymmetric(MatrixXd& X, MatrixXd& A) {
   A2 << X.transpose(), Z2;
   A << A1, A2;
 }
-double bnewt(MatrixXd& X, double error_tol, double rep_max, bool verbose) {
+double bnewt(MatrixXd& X, VectorXd& r, VectorXd& s, double error_tol, double rep_max, bool verbose) {
   double tol = pow(error_tol, 2.0);
   // double tol = error_tol;
   double delta = 0.1;
@@ -672,20 +741,27 @@ double bnewt(MatrixXd& X, double error_tol, double rep_max, bool verbose) {
       cout << "(i, k, res_norm) = (" << i << ", " << k << ", " << res_norm << ")" << endl;
     }
   }
+
+  r = x.head(X.rows());
+  s = x.tail(X.cols());
+  X = r.asDiagonal() * X * s.asDiagonal();
   return step;
 }
 
 // =========================================================== //
 // ========== The main function of matrix balancing ========== //
 // =========================================================== //
-double MatrixBalancing(MatrixXd& X, double error_tol, double rep_max, bool verbose, Int type) {
-  if (type == 1) {
-    return NewtonBalancing(X, error_tol, rep_max, verbose);
-  } else if (type == 2) {
-    return Sinkhorn(X, error_tol, rep_max, verbose);
-  } else if (type == 3) {
-    return bnewt(X, error_tol, rep_max, verbose);
-  } else {
-    return NewtonBalancing(X, error_tol, rep_max, verbose);
+double MatrixBalancing(MatrixXd& X, VectorXd& r, VectorXd& s, double error_tol, double rep_max, bool verbose, Int type) {
+  r = VectorXd::Zero(X.rows());
+  s = VectorXd::Zero(X.cols());
+  switch (type) {
+  case 1:
+    return NewtonBalancing(X, r, s, error_tol, rep_max, verbose);
+  case 2:
+    return Sinkhorn(X, r, s, error_tol, rep_max, verbose);
+  case 3:
+    return bnewt(X, r, s, error_tol, rep_max, verbose);
+  default:
+    return NewtonBalancing(X, r, s, error_tol, rep_max, verbose);
   }
 }

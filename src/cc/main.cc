@@ -29,6 +29,7 @@ int main(int argc, char *argv[]) {
   bool verbose = false;
   bool flag_in = false;
   bool flag_out = false;
+  bool flag_balancer = false;
   bool flag_stat = false;
   bool flag_sparse = false;
   bool do_newton = true;
@@ -38,14 +39,16 @@ int main(int argc, char *argv[]) {
   double error_tol = 1e-05;
   char *input_file = NULL;
   char *output_file = NULL;
+  char *balancer_file = NULL;
   char *stat_file = NULL;
 
   // get arguments
   char opt;
-  while ((opt = getopt(argc, argv, "i:o:t:pe:r:vnsb")) != -1) {
+  while ((opt = getopt(argc, argv, "i:o:a:t:pe:r:vnsb")) != -1) {
     switch (opt) {
     case 'i': input_file = optarg; flag_in = true; break;
     case 'o': output_file = optarg; flag_out = true; break;
+    case 'a': balancer_file = optarg; flag_balancer = true; break;
     case 't': stat_file = optarg; flag_stat = true; break;
     case 'p': flag_sparse = true; break;
     case 'e': error_tol = pow(10, -1 * atof(optarg)); break;
@@ -72,9 +75,17 @@ int main(int argc, char *argv[]) {
     SparseMatrix<double> mat;
     string filename(input_file);
     bool ch = loadMarket(mat, filename);
+    if (!ch) {
+      cerr << endl << "  ERROR: The file \"" << input_file << "\" does not exist!!" << endl;
+      exit(1);
+    }
     X_org = MatrixXd(mat);
   } else {
     ifstream ifs(input_file);
+    if (!ifs) {
+      cerr << endl << "  ERROR: The file \"" << input_file << "\" does not exist!!" << endl;
+      exit(1);
+    }
     readFromCSV(X_org, ifs);
     ifs.close();
   }
@@ -86,7 +97,7 @@ int main(int argc, char *argv[]) {
   for (Int i = 0; i < X_org.rows(); ++i) {
     for (Int j = 0; j < X_org.cols(); ++j) {
       if (X_org(i, j) < 0.0) {
-	cout << "Negative value exists!" << endl;
+	cerr << "  ERROR: Negative value exists!!" << endl;
 	exit(1);
       }
     }
@@ -130,9 +141,11 @@ int main(int argc, char *argv[]) {
     cout << "> Start the BNEWT algorithm:" << endl << flush;
     type = 3;
   }
+  // prepare balancers
+  VectorXd r, s;
   // run matrix balancing
   auto ts = system_clock::now();
-  double step = MatrixBalancing(X, error_tol, rep_max, verbose, type);
+  double step = MatrixBalancing(X, r, s, error_tol, rep_max, verbose, type);
   auto te = system_clock::now();
   auto dur = te - ts;
   cout << "  Number of iterations: " << step << endl;
@@ -141,6 +154,13 @@ int main(int argc, char *argv[]) {
     const static IOFormat CSVFormat(StreamPrecision, DontAlignCols, ",", "\n");
     ofstream ofs(output_file);
     ofs << X.format(CSVFormat);
+    ofs.close();
+  }
+  if (flag_balancer) {
+    const static IOFormat CSVFormat(StreamPrecision, DontAlignCols, ",", "\n");
+    ofstream ofs(balancer_file);
+    ofs << r.transpose().format(CSVFormat) << endl;
+    ofs << s.transpose().format(CSVFormat) << endl;
     ofs.close();
   }
   if (flag_stat) {

@@ -18,13 +18,15 @@ The following three algorithms are implemented:
 
 The main function `matrixBalancing` is defined as:
 ```
-double matrixBalancing(MatrixXd& X, double error_tol, double rep_max, bool verbose, int32_t type)
+double matrixBalancing(MatrixXd& X, VectorXd& r, VectorXd& s, double error_tol, double rep_max, bool verbose, int32_t type)
 ```
 * `X`: an input matrix
-* `error_tol`: Error tolerance
+* `r`: a left balancer for rows will be returned
+* `s`: a right balancer for columns will  be returned
+* `error_tol`: error tolerance
 * `rep_max`: the maximum number of iteration
-* `verbose`: The verbose mode if true
-* `type`: type type of algorithms
+* `verbose`: the verbose mode if true
+* `type`: type of algorithms
   * `type = 1`: Newton balancing algorithm
   * `type = 2`: Sinkhorn-Knopp algorithm
   * `type = 3`: BNEWT algorithm
@@ -51,21 +53,22 @@ $ ./matbalance -i H20.csv
   Step 13, Residual: 4.58902e-05
   Step 15, Residual: 6.21178e-06
   Number of iterations: 15
-  Running time:         1958 [microsec]
+  Running time:         949 [microsec]
 ```
 To compile the program, please edit paths in the "Makefile" according to the location of Eigen library in your environment.
 
 #### Command-line arguments
-* `-i <input_file>`: A path to a csv file of an input matrix (without row and column names)  
-* `-o <output_matrix_file>`: An output file of the balanced matrix  
-* `-t <output_stat_file>`: An output file of statistics  
-* `-p`: Please specify it if the input file is the Matrix Market Exchange Format  
-* `-e <error_tolerance>`: Error tolerance is set to 1e-`<error_tolerance>` [default value: 5]  
-* `-r <max_iteration>`: The maximum number of iterations is set to 1e+`<max_iteration>` [default value: 6]  
-* `-v`: The verbose mode if specified  
-* `-n`: The newton balancing algorithm is used  
-* `-s`: The Sinkhorn-Knopp algorithm is used  
-* `-b`: The BNEWT algorithm is used
+* `-i <input_file>`: a path to a csv file of an input matrix (without row and column names)  
+* `-o <output_matrix_file>`: an output file of the balanced matrix  
+* `-a <balancer_file>`: an output file of two balancers   
+* `-t <output_stat_file>`: an output file of statistics  
+* `-p`: please specify it if the input file is the Matrix Market Exchange Format  
+* `-e <error_tolerance>`: error tolerance is set to 1e-`<error_tolerance>` [default value: 5]  
+* `-r <max_iteration>`: the maximum number of iterations is set to 1e+`<max_iteration>` [default value: 6]  
+* `-v`: the verbose mode if specified  
+* `-n`: the newton balancing algorithm is used  
+* `-s`: the Sinkhorn-Knopp algorithm is used  
+* `-b`: the BNEWT algorithm is used
 
 ## Contact
 Author: Mahito Sugiyama  
