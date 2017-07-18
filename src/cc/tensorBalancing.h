@@ -43,7 +43,7 @@ using namespace std;
 using namespace Eigen;
 using namespace std::chrono;
 
-double EPSILON = 1e-20;
+double EPSILON = 1e-300;
 
 // node structure
 class node {
@@ -76,11 +76,11 @@ ostream &operator<<(ostream& out, const Tensor& X) {
   for (auto&& mat : X) {
     for (auto&& vec : mat) {
       for (Int i = 0; i < (Int)vec.size() - 1; ++i) {
-	cout << vec[i] << ", ";
+	out << vec[i] << ", ";
       }
-      cout << vec.back() << endl;
+      out << vec.back() << endl;
     }
-    cout << endl;
+    out << endl;
   }
   return out;
 }
@@ -122,7 +122,7 @@ void readTensorFromCSV(Tensor& X, Int num_mat, ifstream& ifs) {
   }
 
   if (data.size() % num_mat != 0) {
-    cerr << "The size specification of the input tensor (= " << num_mat << ") is invalid" << endl;
+    cerr << endl << "The size specification of the input tensor (= " << num_mat << ") is invalid!" << endl;
     exit(1);
   }
 
