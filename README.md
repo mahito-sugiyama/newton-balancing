@@ -20,7 +20,7 @@ The main function `matrixBalancing` is defined as:
 ```
 double matrixBalancing(MatrixXd& X, VectorXd& r, VectorXd& s, double error_tol, double rep_max, bool verbose, int32_t type)
 ```
-* `X`: an input matrix
+* `X`: an input matrix, a balanced matrix will be returned
 * `r`: a left balancer for rows will be returned
 * `s`: a right balancer for columns will  be returned
 * `error_tol`: error tolerance
